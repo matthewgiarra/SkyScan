@@ -6,6 +6,7 @@ ENV READTHEDOCS=True
 RUN mkdir -p /app
 WORKDIR /app
 ADD *.txt /app/ 
+COPY pip.conf /etc/pip.conf
 RUN pip3 install -r requirements.txt
 ADD *.py /app/
 

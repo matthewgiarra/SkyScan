@@ -1,5 +1,7 @@
-FROM python:3
-
+FROM python:3.9
+RUN apt-get update
+RUN apt-get install -y libatlas-base-dev
+COPY pip.conf /etc/pip.conf
 RUN mkdir -p /app
 WORKDIR /app
 ADD *.txt /app/ 

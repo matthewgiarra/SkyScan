@@ -231,7 +231,6 @@ gpscat /dev/ttyACM0 | gpsdecode
 The Aircraft Database includes a mapping of the ADS-B ID to the make, model, operator, and other info.  This data is from the OpenSky Network, and must be downloaded:
 
 ```bash
-mkdir ~/Projects/SkyScan/data
 wget https://opensky-network.org/datasets/metadata/aircraftDatabase.csv -P ~/Projects/SkyScan/data
 ```
 

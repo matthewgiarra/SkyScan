@@ -20,6 +20,7 @@ import paho.mqtt.client as mqtt
 from json.decoder import JSONDecodeError
 from sensecam_control import vapix_control,vapix_config
 import utils
+import csv
 
 
 import logging
@@ -44,7 +45,6 @@ cameraMoveSpeed = None
 cameraDelay = None
 cameraLead = 0 
 active = False
-Active = True
 
 object_topic = None
 flight_topic = None
@@ -66,7 +66,7 @@ def calculate_bearing_correction(b):
     return (b + cameraBearingCorrection) % 360
 
  # Copied from VaPix/Sensecam to customize the folder structure for saving pictures          
-def get_jpeg_request():  # 5.2.4.1
+def get_jpeg_request(icao24_countries_data = []):  # 5.2.4.1
     """
     The requests specified in the JPEG/MJPG section are supported by those video products
     that use JPEG and MJPG encoding.
@@ -104,6 +104,14 @@ def get_jpeg_request():  # 5.2.4.1
         logging.info("🚨 Images capture request timed out 🚨  ")
         return
 
+    # Get the lowest icao24 code of each country
+    country_names = []
+    icao_firsts = []
+    if len(icao24_countries_data) > 0:
+        icao_firsts = [int(x[0], 16) for x in icao24_countries_data]
+        icao_lasts  = [int(x[1], 16) for x in icao24_countries_data]
+        country_names = [x[2] for x in icao24_countries_data]
+
     disk_time = datetime.now()
     if resp.status_code == 200:
         captureDir = "capture/{}".format(currentPlane["type"])
@@ -113,6 +121,25 @@ def get_jpeg_request():  # 5.2.4.1
             if e.errno != errno.EEXIST:
                 raise  # This was not a "directory exist" error..
         filename = "{}/{}_{}_{}_{}_{}.jpg".format(captureDir, currentPlane["icao24"], int(bearing), int(elevation), int(distance3d), datetime.now().strftime('%Y-%m-%d-%H-%M-%S'))
+        
+        # Get country name
+        if len(country_names) > 0:
+            icao_this_plane = int(currentPlane["icao24"], 16)
+
+            # Find the first entry in the icao24 codes greater than or equal to the current plane's code
+            country_idx = [i for i, (a,b) in enumerate(zip(icao_firsts, icao_lasts)) if a<=icao_this_plane<=b][0]
+            # Look up the country name
+            country_name = country_names[country_idx]
+        else:
+            country_name = None
+
+        # Add country name to current plane data dict
+        currentPlane.update({'country' : country_name})
+
+        # Write the json file for this plane
+        filename_json = filename.replace(".jpg",  ".json")
+        with open(filename_json, "w") as jsonFile:
+            json.dump(currentPlane, jsonFile)
 
         # Original
         with open(filename, 'wb') as var:
@@ -214,7 +241,7 @@ def calculateCameraPosition():
 
 
 
-def moveCamera(ip, username, password):
+def moveCamera(ip, username, password, icao24_countries_data = []):
 
     movePeriod = 250  # milliseconds
     capturePeriod = 1000 # milliseconds
@@ -239,17 +266,15 @@ def moveCamera(ip, username, password):
 
             if captureTimeout <= datetime.now():
                 time.sleep(cameraDelay)
-                get_jpeg_request()
+                get_jpeg_request(icao24_countries_data)
                 captureTimeout = captureTimeout + timedelta(milliseconds=capturePeriod)
                 if captureTimeout <= datetime.now():
                     lag = datetime.now() - captureTimeout
                     logging.info(" 🚨 Capture execution time was greater that Capture Period - lag: {}".format(lag))
                     captureTimeout = datetime.now() + timedelta(milliseconds=capturePeriod)
-            delay = 0.005
-            time.sleep(delay)
+            time.sleep(0.005)
         else:
-            delay = 1
-            time.sleep(delay)
+            time.sleep(1)
 
 def update_config(config):
     global cameraZoom
@@ -282,14 +307,7 @@ def update_config(config):
 #############################################
 ##         MQTT Callback Function          ##
 #############################################
-
 def on_message(client, userdata, message):
-    try:
-        return on_message_impl(client, userdata, message)
-    except Exception as exc: 
-        logging.exception("Error in MQTT message callback: %s", exc)
-
-def on_message_impl(client, userdata, message):
     global currentPlane
     global object_timeout
     global camera_longitude
@@ -306,14 +324,13 @@ def on_message_impl(client, userdata, message):
         #payload = json.loads(messsage.payload) # you can use json.loads to convert string to json
     except JSONDecodeError as e:
     # do whatever you want
-        logging.exception("Error decoding message as JSON: %s", e)
+        print(e)
     except TypeError as e:
-        logging.exception("Error decoding message as JSON: %s", e)
     # do whatever you want in this case
+        print(e)
     except ValueError as e:
-        logging.exception("Error decoding message as JSON: %s", e)
+        print(e)
     except:
-        logging.exception("Error decoding message as JSON: %s", e)
         print("Caught it!")
     
     if message.topic == object_topic:
@@ -324,9 +341,9 @@ def on_message_impl(client, userdata, message):
         if "icao24" in update:
             if active is False:
                 logging.info("{}\t[Starting Capture]".format(update["icao24"]))
+            active = True
             logging.info("{}\t[IMAGE]\tBearing: {} \tElv: {} \tDist: {}".format(update["icao24"],int(update["bearing"]),int(update["elevation"]),int(update["distance"])))
             currentPlane = update
-            active = True
         else:
             if active is True:
                 logging.info("{}\t[Stopping Capture]".format(currentPlane["icao24"]))
@@ -345,13 +362,6 @@ def on_message_impl(client, userdata, message):
     else:
         logging.info("Message: {} Object: {} Flight: {}".format(message.topic, object_topic, flight_topic))
 
-
-def on_disconnect(client, userdata, rc):
-    global Active
-    Active = False
-    logging.error("Axis-PTZ MQTT Disconnect!")
-
-
 def main():
     global args
     global logging
@@ -367,7 +377,6 @@ def main():
     global cameraConfig
     global flight_topic
     global object_topic
-    global Active
 
     parser = argparse.ArgumentParser(description='An MQTT based camera controller')
     parser.add_argument('--lat', type=float, help="Latitude of camera")
@@ -385,6 +394,7 @@ def main():
     parser.add_argument('-d', '--camera-delay', type=float, help="How many seconds after issuing a Pan/Tilt command should a picture be taken", default=0)
     parser.add_argument('-z', '--camera-zoom', type=int, help="The zoom setting for the camera (0-9999)", default=9999)
     parser.add_argument('-v', '--verbose',  action="store_true", help="Verbose output")
+    parser.add_argument('--countries-file', type=str, default="/data/icao24_countries.csv")
 
     args = parser.parse_args()
 
@@ -414,20 +424,26 @@ def main():
     camera_latitude = args.lat
     camera_altitude = args.alt # Altitude is in METERS
     camera_lead = args.camera_lead
+    icao24_countries_file = args.countries_file
     #cameraConfig = vapix_config.CameraConfiguration(args.axis_ip, args.axis_username, args.axis_password)
 
-    cameraMove = threading.Thread(target=moveCamera, args=[args.axis_ip, args.axis_username, args.axis_password],daemon=True)
-    cameraMove.start()
+    # Read the countries file
+    icao24_countries_data = []
+    if os.path.isfile(icao24_countries_file):
+        with open(icao24_countries_file, "r") as f:
+            reader = csv.reader(f)
+            next(reader)
+            icao24_countries_data = list(reader)
+
+    threading.Thread(target=moveCamera, args=[args.axis_ip, args.axis_username, args.axis_password, icao24_countries_data],daemon=True).start()
         # Sleep for a bit so we're not hammering the HAT with updates
-    delay = 0.005
-    time.sleep(delay)
+    time.sleep(0.005)
     flight_topic=args.mqtt_flight_topic
     object_topic = args.mqtt_object_topic
     print("connecting to MQTT broker at "+ args.mqtt_host+", channel '"+flight_topic+"'")
     client = mqtt.Client("skyscan-axis-ptz-camera-" + ID) #create new instance
 
     client.on_message=on_message #attach function to callback
-    client.on_disconnect = on_disconnect
 
     client.connect(args.mqtt_host) #connect to broker
     client.loop_start() #start the loop
@@ -441,16 +457,11 @@ def main():
     ##                Main Loop                ##
     #############################################
     timeHeartbeat = 0
-    while Active:
+    while True:
         if timeHeartbeat < time.mktime(time.gmtime()):
             timeHeartbeat = time.mktime(time.gmtime()) + 10
             client.publish("skyscan/heartbeat", "skyscan-axis-ptz-camera-"+ID+" Heartbeat", 0, False)
-            if not cameraMove.is_alive():
-                logging.critical("Thread within Axis-PTZ has failed!  Killing container.")
-                Active=False
-                
-        delay = 0.1
-        time.sleep(delay)
+        time.sleep(0.1)
 
 
 

@@ -1,5 +1,5 @@
 FROM debian
-
+COPY pip.conf /etc/pip.conf
 RUN apt update && \
     apt install -y python3 python3-pip gpsd-clients gpsd
 

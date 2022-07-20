@@ -1,6 +1,7 @@
-FROM python:3
+FROM python:3.9
 
 RUN apt-get update
+COPY pip.conf /etc/pip.conf
 RUN pip3 install --upgrade pip
 RUN pip3 install jupyter paho-mqtt
 RUN mkdir /opt/notebooks

@@ -1,11 +1,14 @@
-FROM python:3
-
+FROM python:3.9
+RUN apt-get update
+RUN apt-get install -y libatlas-base-dev
 RUN mkdir -p /app/mqtt_wrapper/
 WORKDIR /app
 # Moves the requirement file in and installs.
 # Building the Py Packages takes forever, so make edits after this
 # --------
 ADD *.txt /app/ 
+COPY pip.conf /etc/pip.conf
+RUN pip3 install --upgrade pip
 RUN pip3 install -r requirements.txt
 # --------
 ADD static /app/static/
